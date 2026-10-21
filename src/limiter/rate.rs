@@ -188,7 +188,10 @@ mod tests {
         limiter.set_user_limit(1, 1);
         assert!(limiter.is_limited(1));
         limiter.prune_idle();
-        assert!(limiter.is_limited(1), "fresh limit buckets must survive prune");
+        assert!(
+            limiter.is_limited(1),
+            "fresh limit buckets must survive prune"
+        );
         {
             let mut shard = limiter.shards[limiter.shard_idx(1)].lock();
             shard.get_mut(&1).unwrap().last_update -= Duration::from_secs(7200);

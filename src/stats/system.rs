@@ -68,7 +68,8 @@ impl SystemCollector {
             let cpu = sys.global_cpu_info().cpu_usage() as f64;
             let mem_total = sys.total_memory();
             // Prefer process RSS so panel reflects this node, not whole-host usage.
-            let mem_used = crate::stats::memory::process_rss_bytes().unwrap_or_else(|| sys.used_memory());
+            let mem_used =
+                crate::stats::memory::process_rss_bytes().unwrap_or_else(|| sys.used_memory());
             let swap_total = sys.total_swap();
             let swap_used = sys.used_swap();
             let uptime = System::uptime();

@@ -3,7 +3,10 @@ use serde::Serialize;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use std::sync::atomic::Ordering;
+use tokio::sync::mpsc::{self, Sender};
+
+pub const AUDIT_QUEUE_CAPACITY: usize = 4096;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditRecord {
@@ -100,7 +103,7 @@ impl Default for AuditRecord {
 
 #[derive(Clone)]
 pub struct AuditLogger {
-    tx: Option<UnboundedSender<AuditRecord>>,
+    tx: Option<Sender<AuditRecord>>,
 }
 
 impl AuditLogger {
@@ -111,9 +114,10 @@ impl AuditLogger {
                 let _ = std::fs::create_dir_all(parent);
             }
 
-            let (tx, mut rx) = mpsc::unbounded_channel::<AuditRecord>();
+            let (tx, mut rx) = mpsc::channel::<AuditRecord>(AUDIT_QUEUE_CAPACITY);
             tokio::spawn(async move {
                 while let Some(record) = rx.recv().await {
+                    crate::stats::memory::saturating_dec(&crate::stats::memory::AUDIT_QUEUE_LEN);
                     if let Ok(json_line) = serde_json::to_string(&record) {
                         if let Ok(mut file) =
                             OpenOptions::new().create(true).append(true).open(&path_buf)
@@ -147,7 +151,14 @@ impl AuditLogger {
             record.source = "client".to_string();
         }
         if let Some(tx) = &self.tx {
-            let _ = tx.send(record);
+            match tx.try_send(record) {
+                Ok(()) => {
+                    crate::stats::memory::AUDIT_QUEUE_LEN.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(_) => {
+                    crate::stats::memory::AUDIT_QUEUE_DROPPED.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
     }
 }

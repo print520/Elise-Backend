@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="Grandova/Elise-Backend"
+REPO="print520/Elise-Backend"
 CONF_DIR="/etc/elise"
 ELISE_DIR="/usr/local/elise"
 BIN_DIR="/usr/local/bin"

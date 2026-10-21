@@ -131,6 +131,7 @@ impl MieruUserIndex {
     }
 
     pub fn get_derived_key(&self, user: &MieruUser, salt: &[u8; 32]) -> [u8; 32] {
+        const MAX_CACHED_KEYS: usize = 4096;
         let key_tuple = (user.panel_user.id, *salt);
         {
             let cache = self.cached_keys.read();
@@ -140,6 +141,23 @@ impl MieruUserIndex {
         }
         let derived = pbkdf2_sha256_32(&user.hashed_password, salt, PBKDF2_ROUNDS);
         let mut cache = self.cached_keys.write();
+        if cache.len() >= MAX_CACHED_KEYS {
+            // Drop entries whose salt is not among the current 3 time-window salts.
+            let now_sec = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let live = salts_from_time(now_sec);
+            cache.retain(|(_, salt), _| live.iter().any(|s| s == salt));
+            if cache.len() >= MAX_CACHED_KEYS {
+                // Still over cap: drop arbitrary half to bound memory.
+                let drop_n = cache.len() / 2;
+                let keys: Vec<_> = cache.keys().take(drop_n).cloned().collect();
+                for k in keys {
+                    cache.remove(&k);
+                }
+            }
+        }
         cache.insert(key_tuple, derived);
         derived
     }

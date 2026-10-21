@@ -213,7 +213,7 @@ where
                         let (input, mut incoming) = mpsc::channel::<Bytes>(16);
                         let child = cancel.child_token();
                         sessions.insert(id, Session { input: Some(input), cancel: child.clone() });
-                        let (plain, bridge) = tokio::io::duplex(65536);
+                        let (plain, bridge) = tokio::io::duplex(16384);
                         let handler = handle(Box::new(plain));
                         let output = output.clone();
                         tasks.spawn(async move {

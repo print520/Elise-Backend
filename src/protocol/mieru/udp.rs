@@ -275,7 +275,7 @@ async fn handle_udp_packet(
         .write()
         .insert((remote_addr, session_id), active_session.clone());
 
-    let (duplex_client, duplex_server) = tokio::io::duplex(65536);
+    let (duplex_client, duplex_server) = tokio::io::duplex(16384);
     let (client_rx, mut client_tx) = tokio::io::split(duplex_client);
     let (server_rx, server_tx) = tokio::io::split(duplex_server);
 

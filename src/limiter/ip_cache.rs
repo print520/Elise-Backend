@@ -15,6 +15,8 @@ struct PersistentEntry {
     timestamp: u64,
 }
 
+const MAX_IP_USER_CACHE_ENTRIES: usize = 50_000;
+
 #[derive(Clone)]
 pub struct IpUserCache {
     ttl: Duration,
@@ -60,6 +62,17 @@ impl IpUserCache {
 
     pub fn insert(&self, ip: IpAddr, user_id: u32) {
         let mut guard = self.cache.write();
+        if guard.len() >= MAX_IP_USER_CACHE_ENTRIES && !guard.contains_key(&ip) {
+            let ttl = self.ttl;
+            guard.retain(|_, &mut (_, instant)| instant.elapsed() <= ttl);
+            if guard.len() >= MAX_IP_USER_CACHE_ENTRIES {
+                let drop_n = (guard.len() / 4).max(1);
+                let victims: Vec<_> = guard.keys().take(drop_n).copied().collect();
+                for key in victims {
+                    guard.remove(&key);
+                }
+            }
+        }
         guard.insert(ip, (user_id, Instant::now()));
     }
 
@@ -67,6 +80,13 @@ impl IpUserCache {
         let mut guard = self.cache.write();
         let ttl = self.ttl;
         guard.retain(|_, &mut (_, instant)| instant.elapsed() <= ttl);
+        if guard.len() > MAX_IP_USER_CACHE_ENTRIES {
+            let drop_n = guard.len() - MAX_IP_USER_CACHE_ENTRIES;
+            let victims: Vec<_> = guard.keys().take(drop_n).copied().collect();
+            for key in victims {
+                guard.remove(&key);
+            }
+        }
     }
 
     pub fn save_to_disk(&self) {

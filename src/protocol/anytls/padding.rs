@@ -1,12 +1,28 @@
 use md5::Digest;
+use rand::RngCore;
 use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
 
-pub const DEFAULT_PADDING_SCHEME: &str = "stop=8\n0=30-30\n1=100-400\n2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000\n3=9-9,500-1000\n4=500-1000\n5=500-1000\n6=500-1000\n7=500-1000";
+/// Upstream AnyTLS / Mihomo bootstrap scheme (clients still start with this).
+/// Kept for reference and tests that assert wire-compat with stock clients.
+pub const UPSTREAM_BOOTSTRAP_PADDING_SCHEME: &str = "stop=8\n0=30-30\n1=100-400\n2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000\n3=9-9,500-1000\n4=500-1000\n5=500-1000\n6=500-1000\n7=500-1000";
+
+/// Elise server default. Deliberately different from the public bootstrap scheme so
+/// `padding-md5` mismatches and Mihomo receives `cmdUpdatePaddingScheme` on first
+/// connect — subsequent sessions use this distribution instead of the well-known one.
+/// Frame format / command codes are unchanged; Clash Meta / Mihomo remain compatible.
+pub const DEFAULT_PADDING_SCHEME: &str = "stop=8\n0=40-96\n1=128-384\n2=280-460,c,420-880,c,420-880,c,520-1080\n3=16-32,360-920\n4=320-880\n5=380-960\n6=420-1020\n7=480-1120";
 
 pub const CMD_WASTE: u8 = 0;
 pub const FRAME_OVERHEAD: usize = 7;
 pub const MAX_FRAME_SIZE: usize = 0xffff;
+
+fn append_waste_payload(buf: &mut Vec<u8>, len: usize) {
+    // Prefer non-zero fill so waste frames are not a flat zero run on the wire.
+    let start = buf.len();
+    buf.resize(start + len, 0);
+    RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf[start..]);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaddingRange {
@@ -188,7 +204,7 @@ pub async fn write_padded_frame<W: AsyncWriteExt + Unpin>(
                 record.push(CMD_WASTE);
                 record.extend_from_slice(&0u32.to_be_bytes());
                 record.extend_from_slice(&(waste_len as u16).to_be_bytes());
-                record.resize(record.len() + waste_len, 0);
+                append_waste_payload(&mut record, waste_len);
                 remaining_pad -= FRAME_OVERHEAD + waste_len;
             }
         } else {
@@ -198,7 +214,7 @@ pub async fn write_padded_frame<W: AsyncWriteExt + Unpin>(
                 record.push(CMD_WASTE);
                 record.extend_from_slice(&0u32.to_be_bytes());
                 record.extend_from_slice(&(waste_len as u16).to_be_bytes());
-                record.resize(record.len() + waste_len, 0);
+                append_waste_payload(&mut record, waste_len);
                 remaining_pad -= waste_len;
             }
         }
@@ -218,22 +234,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_compiled_padding_scheme_default() {
+    fn test_compiled_padding_scheme_elise_default() {
         let scheme = CompiledPaddingScheme::parse(DEFAULT_PADDING_SCHEME).unwrap();
         assert_eq!(scheme.stop, 8);
         assert_eq!(scheme.records.len(), 8);
 
         let r0 = scheme.records.get(&0).unwrap();
         assert_eq!(r0.len(), 1);
-        assert_eq!(r0[0], PaddingRange::Exact(30));
+        assert_eq!(r0[0], PaddingRange::Range(40, 96));
 
         let r2 = scheme.records.get(&2).unwrap();
-        assert_eq!(r2.len(), 9);
-        assert_eq!(r2[0], PaddingRange::Range(400, 500));
+        assert_eq!(r2.len(), 7);
+        assert_eq!(r2[0], PaddingRange::Range(280, 460));
         assert_eq!(r2[1], PaddingRange::CheckMark);
 
         assert_eq!(scheme.md5_hex.len(), 32);
-        assert_eq!(scheme.md5_bytes.len(), 16);
+        // Must differ from the public Mihomo bootstrap scheme so UPDATE fires.
+        let upstream = CompiledPaddingScheme::parse(UPSTREAM_BOOTSTRAP_PADDING_SCHEME).unwrap();
+        assert_ne!(scheme.md5_hex, upstream.md5_hex);
+    }
+
+    #[test]
+    fn test_upstream_bootstrap_scheme_still_parses() {
+        let scheme = CompiledPaddingScheme::parse(UPSTREAM_BOOTSTRAP_PADDING_SCHEME).unwrap();
+        assert_eq!(scheme.stop, 8);
+        assert_eq!(scheme.records.get(&0).unwrap()[0], PaddingRange::Exact(30));
+        let r2 = scheme.records.get(&2).unwrap();
+        assert_eq!(r2.len(), 9);
+        assert_eq!(r2[0], PaddingRange::Range(400, 500));
     }
 
     #[test]
@@ -249,9 +277,9 @@ mod tests {
     fn test_generate_payload_sizes() {
         let scheme = CompiledPaddingScheme::parse(DEFAULT_PADDING_SCHEME).unwrap();
         let sizes = scheme.generate_record_payload_sizes(2).unwrap();
-        assert_eq!(sizes.len(), 9);
+        assert_eq!(sizes.len(), 7);
 
-        assert!(sizes[0] >= 400 && sizes[0] < 500);
+        assert!(sizes[0] >= 280 && sizes[0] < 460);
 
         assert_eq!(sizes[1], -1);
     }

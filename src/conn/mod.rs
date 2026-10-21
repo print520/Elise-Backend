@@ -351,7 +351,7 @@ where
     A: AsyncRead + AsyncWrite + Unpin,
     B: AsyncRead + AsyncWrite + Unpin,
 {
-    const BUFFER_SIZE: usize = 32768;
+    const BUFFER_SIZE: usize = 16384;
 
     let idle = IdleTimeout::new(timeout);
 

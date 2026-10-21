@@ -1,11 +1,14 @@
 use crate::observability::AuditRecord;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::{self, Sender};
 use tracing::error;
+
+pub const CLICKHOUSE_QUEUE_CAPACITY: usize = 4096;
 
 #[derive(Clone)]
 pub struct ClickHouseLogger {
-    tx: Option<UnboundedSender<AuditRecord>>,
+    tx: Option<Sender<AuditRecord>>,
 }
 
 impl ClickHouseLogger {
@@ -21,7 +24,7 @@ impl ClickHouseLogger {
             return Self { tx: None };
         }
 
-        let (tx, mut rx) = mpsc::unbounded_channel::<AuditRecord>();
+        let (tx, mut rx) = mpsc::channel::<AuditRecord>(CLICKHOUSE_QUEUE_CAPACITY);
         let client = reqwest::Client::new();
         let target_url = format!(
             "{}/?database={}&query=INSERT%20INTO%20{}%20FORMAT%20JSONEachRow",
@@ -35,6 +38,9 @@ impl ClickHouseLogger {
             loop {
                 tokio::select! {
                     Some(record) = rx.recv() => {
+                        crate::stats::memory::saturating_dec(
+                            &crate::stats::memory::CLICKHOUSE_QUEUE_LEN,
+                        );
                         batch.push(record);
                         if batch.len() >= 500 {
                             Self::flush(&client, &target_url, &user, password.as_deref(), &mut batch).await;
@@ -82,7 +88,14 @@ impl ClickHouseLogger {
 
     pub fn record(&self, record: AuditRecord) {
         if let Some(tx) = &self.tx {
-            let _ = tx.send(record);
+            match tx.try_send(record) {
+                Ok(()) => {
+                    crate::stats::memory::CLICKHOUSE_QUEUE_LEN.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(_) => {
+                    crate::stats::memory::CLICKHOUSE_QUEUE_DROPPED.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
     }
 }

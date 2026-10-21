@@ -132,11 +132,14 @@ impl RateLimiter {
     }
 
     pub fn prune_idle(&self) {
+        // Remove buckets with no consume/update for a while. Panel user sync
+        // re-applies active limits via set_user_limit.
+        const IDLE_TTL: Duration = Duration::from_secs(600);
         let now = Instant::now();
         for shard in self.shards.iter() {
-            for bucket in shard.lock().values_mut() {
-                bucket.replenish(now);
-            }
+            shard
+                .lock()
+                .retain(|_, bucket| now.duration_since(bucket.last_update) < IDLE_TTL);
         }
     }
 }

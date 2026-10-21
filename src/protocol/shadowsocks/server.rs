@@ -469,7 +469,7 @@ async fn handle_connection(
     let stream = match stream {
         super::transport::Accepted::Stream(stream) => stream,
         super::transport::Accepted::Restls(session) => {
-            let (plain, framed) = tokio::io::duplex(64 * 1024);
+            let (plain, framed) = tokio::io::duplex(16384);
             let relay = async { session.relay(framed).await.map_err(std::io::Error::other) };
             let handler = handle_stream(
                 Box::new(plain),

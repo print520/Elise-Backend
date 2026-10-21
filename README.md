@@ -33,13 +33,13 @@
 
 ```bash
 # 自动安装或更新最新正式版
-bash <(curl -fsSL https://raw.githubusercontent.com/Grandova/Elise-Backend/main/scripts/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/print520/Elise-Backend/main/scripts/install.sh)
 
 # 安装指定发布版本
-bash <(curl -fsSL https://raw.githubusercontent.com/Grandova/Elise-Backend/main/scripts/install.sh) v1.0.0
+bash <(curl -fsSL https://raw.githubusercontent.com/print520/Elise-Backend/main/scripts/install.sh) v1.0.0
 
 # 安装最新测试版 (Beta)
-bash <(curl -fsSL https://raw.githubusercontent.com/Grandova/Elise-Backend/main/scripts/install.sh) --beta
+bash <(curl -fsSL https://raw.githubusercontent.com/print520/Elise-Backend/main/scripts/install.sh) --beta
 ```
 
 脚本下载 GitHub Release 并核对 SHA-256。原生程序安装到 `/usr/local/elise/elise`，配置在 `/etc/elise/elise.conf`。systemd/OpenRC 使用各自服务文件。`/usr/local/bin/elise` 优先安装管理脚本，获取不到时可能链接原生二进制；只有前者提供交互菜单。本地源码与线上 Release 可能不同。

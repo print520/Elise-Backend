@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-REPO_OWNER = "Grandova"
+REPO_OWNER = "print520"
 REPO_NAME = "Elise-Backend"
 TARGET_AMD64 = "x86_64-unknown-linux-musl"
 TARGET_ARM64 = "aarch64-unknown-linux-musl"

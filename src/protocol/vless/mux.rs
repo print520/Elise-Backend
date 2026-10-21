@@ -3,14 +3,19 @@ use crate::limiter::ConnGuard;
 use crate::panel::types::User;
 use crate::protocol::InboundContext;
 use crate::proxy::router::MatchContext;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
+
+pub const MAX_MUX_SESSIONS: usize = 64;
+pub const MUX_IDLE_TIMEOUT_SECS: u64 = 60;
 
 #[inline]
 pub fn encode_mux_meta(session_id: u16, status: u8, option: u8) -> Vec<u8> {
@@ -122,9 +127,16 @@ pub async fn handle_vless_mux(
     let user_id = user.id;
     let rate_limiter = ctx.rate_limiter.clone();
     let traffic = Arc::new(TrafficGuard::new(user_id, ctx.on_traffic.clone()));
-    let idle = IdleTimeout::new(ctx.global_config.tcp_timeout.max(300));
+    let idle = IdleTimeout::new(
+        ctx.global_config
+            .tcp_timeout
+            .max(MUX_IDLE_TIMEOUT_SECS)
+            .max(300),
+    );
 
-    let mut sessions: HashMap<u16, mpsc::Sender<Vec<u8>>> = HashMap::new();
+    let sessions: Arc<Mutex<HashMap<u16, mpsc::Sender<Vec<u8>>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    crate::stats::memory::VLESS_MUX_SESSIONS.fetch_add(1, Ordering::Relaxed);
 
     let reader_task = async {
         let mut meta_len_buf = [0u8; 2];
@@ -211,7 +223,23 @@ pub async fn handle_vless_mux(
                     }
 
                     let (tx_sub, mut rx_sub) = mpsc::channel::<Vec<u8>>(64);
-                    sessions.insert(session_id, tx_sub);
+                    let inserted = {
+                        let mut map = sessions.lock();
+                        if map.len() >= MAX_MUX_SESSIONS || map.contains_key(&session_id) {
+                            false
+                        } else {
+                            map.insert(session_id, tx_sub);
+                            true
+                        }
+                    };
+                    if !inserted {
+                        warn!(
+                            "VLESS Mux: session limit {} reached or duplicate id {}, rejecting",
+                            MAX_MUX_SESSIONS, session_id
+                        );
+                        let _ = tx_out.send(encode_mux_end(session_id)).await;
+                        continue;
+                    }
 
                     let mctx = MatchContext {
                         node_id: ctx.node_id,
@@ -227,6 +255,7 @@ pub async fn handle_vless_mux(
                     let traffic_clone = traffic.clone();
                     let rate_limiter_clone = rate_limiter.clone();
                     let dialer = ctx.router.dialer();
+                    let sessions_clone = sessions.clone();
 
                     if network == 2 {
                         tokio::spawn(async move {
@@ -251,10 +280,10 @@ pub async fn handle_vless_mux(
 
                                     let sock_recv = socket;
                                     let down = async {
-                                        let mut buf = vec![0u8; 65535];
+                                        let mut buf = vec![0u8; 16384];
                                         loop {
                                             let res = tokio::time::timeout(
-                                                Duration::from_secs(60),
+                                                Duration::from_secs(MUX_IDLE_TIMEOUT_SECS),
                                                 sock_recv.recv(&mut buf),
                                             )
                                             .await;
@@ -287,6 +316,7 @@ pub async fn handle_vless_mux(
                                     let _ = tx_out_clone.send(encode_mux_end(session_id)).await;
                                 }
                             }
+                            sessions_clone.lock().remove(&session_id);
                         });
                     } else {
                         tokio::spawn(async move {
@@ -299,6 +329,7 @@ pub async fn handle_vless_mux(
                                         if tcp_stream.write_all(&payload).await.is_err() {
                                             let _ =
                                                 tx_out_clone.send(encode_mux_end(session_id)).await;
+                                            sessions_clone.lock().remove(&session_id);
                                             return;
                                         }
                                     }
@@ -346,11 +377,13 @@ pub async fn handle_vless_mux(
                                     let _ = tx_out_clone.send(encode_mux_end(session_id)).await;
                                 }
                             }
+                            sessions_clone.lock().remove(&session_id);
                         });
                     }
                 }
                 2 => {
-                    if let Some(tx_sub) = sessions.get(&session_id) {
+                    let tx_sub = sessions.lock().get(&session_id).cloned();
+                    if let Some(tx_sub) = tx_sub {
                         if !payload.is_empty() {
                             rate_limiter.throttle(user_id, payload.len()).await;
                             traffic.add(payload.len() as u64, 0);
@@ -361,7 +394,7 @@ pub async fn handle_vless_mux(
                     }
                 }
                 3 => {
-                    sessions.remove(&session_id);
+                    sessions.lock().remove(&session_id);
                 }
                 4 => {
                     let _ = tx_out.send(encode_mux_meta(session_id, 4, 0)).await;
@@ -384,6 +417,9 @@ pub async fn handle_vless_mux(
             }
         }
     }
+
+    sessions.lock().clear();
+    crate::stats::memory::saturating_dec(&crate::stats::memory::VLESS_MUX_SESSIONS);
 
     Ok(())
 }

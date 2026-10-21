@@ -31,6 +31,18 @@ pub const CMD_SERVER_SETTINGS: u8 = 10;
 pub const MAX_CONCURRENT_STREAMS: usize = 1024;
 pub const FRAME_READ_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const WAITING_DEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Base timeout ± ~20% jitter so idle/close timing is less uniform across sessions.
+fn jittered_timeout(base: Duration) -> Duration {
+    let base_ms = base.as_millis() as u64;
+    if base_ms == 0 {
+        return base;
+    }
+    let span = (base_ms / 5).max(1);
+    let offset = rand::random::<u64>() % (span * 2 + 1);
+    Duration::from_millis(base_ms.saturating_sub(span).saturating_add(offset).max(1))
+}
 
 pub fn make_frame(command: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(FRAME_OVERHEAD + payload.len());
@@ -42,14 +54,16 @@ pub fn make_frame(command: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
 }
 
 pub enum StreamState {
-    WaitingForDestination,
+    WaitingForDestination { since: Instant },
     Active(mpsc::Sender<Vec<u8>>),
 }
 
 impl Clone for StreamState {
     fn clone(&self) -> Self {
         match self {
-            StreamState::WaitingForDestination => StreamState::WaitingForDestination,
+            StreamState::WaitingForDestination { since } => {
+                StreamState::WaitingForDestination { since: *since }
+            }
             StreamState::Active(ref tx) => StreamState::Active(tx.clone()),
         }
     }
@@ -101,7 +115,11 @@ pub async fn handle_anytls_session(
     });
 
     let streams: Arc<RwLock<HashMap<u32, StreamState>>> = Arc::new(RwLock::new(HashMap::new()));
-    let last_activity = Arc::new(AtomicU64::new(Instant::now().elapsed().as_millis() as u64));
+    let session_start = Instant::now();
+    let last_activity = Arc::new(AtomicU64::new(0));
+    let session_idle_timeout = jittered_timeout(SESSION_IDLE_TIMEOUT);
+    let waiting_dest_timeout = jittered_timeout(WAITING_DEST_TIMEOUT);
+    crate::stats::memory::ANYTLS_SESSIONS.fetch_add(1, Ordering::Relaxed);
 
     let mut stream_tasks = JoinSet::new();
 
@@ -122,9 +140,29 @@ pub async fn handle_anytls_session(
                     return Ok(());
                 }
                 _ = &mut tick => {
+                    let expired: Vec<u32> = {
+                        let mut streams_guard = streams.write();
+                        let mut expired = Vec::new();
+                        streams_guard.retain(|&id, state| match state {
+                            StreamState::WaitingForDestination { since }
+                                if since.elapsed() > waiting_dest_timeout =>
+                            {
+                                expired.push(id);
+                                false
+                            }
+                            _ => true,
+                        });
+                        expired
+                    };
+                    for id in expired {
+                        debug!("AnyTLS WaitingForDestination timeout for stream {}", id);
+                        let _ = session_tx.send(make_frame(CMD_FIN, id, &[])).await;
+                    }
+
                     let has_streams = !streams.read().is_empty();
-                    let elapsed_ms = Instant::now().elapsed().as_millis() as u64 - last_activity.load(Ordering::Relaxed);
-                    if !has_streams && elapsed_ms > SESSION_IDLE_TIMEOUT.as_millis() as u64 {
+                    let elapsed_ms = session_start.elapsed().as_millis() as u64
+                        - last_activity.load(Ordering::Relaxed);
+                    if !has_streams && elapsed_ms > session_idle_timeout.as_millis() as u64 {
                         debug!("AnyTLS session idle timeout reached with 0 active streams; closing session");
                         return Ok(());
                     }
@@ -135,7 +173,10 @@ pub async fn handle_anytls_session(
 
             match read_hdr {
                 Ok(_) => {
-                    last_activity.store(Instant::now().elapsed().as_millis() as u64, Ordering::Relaxed);
+                    last_activity.store(
+                        session_start.elapsed().as_millis() as u64,
+                        Ordering::Relaxed,
+                    );
                 }
                 Err(e) => {
                     debug!("AnyTLS client disconnected: {:?}", e);
@@ -157,7 +198,10 @@ pub async fn handle_anytls_session(
 
                 match read_payload_res {
                     Ok(Ok(_)) => {
-                        last_activity.store(Instant::now().elapsed().as_millis() as u64, Ordering::Relaxed);
+                        last_activity.store(
+                            session_start.elapsed().as_millis() as u64,
+                            Ordering::Relaxed,
+                        );
                     }
                     _ => {
                         warn!("AnyTLS frame payload read timeout or error for stream {}", stream_id);
@@ -213,21 +257,21 @@ pub async fn handle_anytls_session(
 
                     if !settings_received {
                         let _ = session_tx
-                            .send(make_frame(CMD_ALERT, 0, b"anytls: client did not send its settings"))
+                            .send(make_frame(CMD_ALERT, 0, b"settings required before syn"))
                             .await;
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            "anytls: client sent SYN before settings",
+                            "client sent SYN before settings",
                         ));
                     }
 
                     if stream_id <= last_stream_id {
                         let _ = session_tx
-                            .send(make_frame(CMD_ALERT, 0, b"anytls: non-monotonic stream id"))
+                            .send(make_frame(CMD_ALERT, 0, b"invalid stream id"))
                             .await;
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            format!("anytls: non-monotonic stream id: got {stream_id} <= {last_stream_id}"),
+                            format!("non-monotonic stream id: got {stream_id} <= {last_stream_id}"),
                         ));
                     }
                     last_stream_id = stream_id;
@@ -235,7 +279,12 @@ pub async fn handle_anytls_session(
                     let should_reject = {
                         let mut streams_guard = streams.write();
                         if streams_guard.len() < MAX_CONCURRENT_STREAMS {
-                            streams_guard.insert(stream_id, StreamState::WaitingForDestination);
+                            streams_guard.insert(
+                                stream_id,
+                                StreamState::WaitingForDestination {
+                                    since: Instant::now(),
+                                },
+                            );
                             false
                         } else {
                             true
@@ -249,7 +298,7 @@ pub async fn handle_anytls_session(
                 CMD_PSH => {
                     let state_opt = streams.read().get(&stream_id).cloned();
                     match state_opt {
-                        Some(StreamState::WaitingForDestination) => {
+                        Some(StreamState::WaitingForDestination { .. }) => {
                             if let Some((target_host, target_ip, target_port, leftover)) =
                                 parse_socks5_addr(&payload)
                             {
@@ -343,6 +392,7 @@ pub async fn handle_anytls_session(
     stream_tasks.abort_all();
     drop(session_tx);
     let _ = writer_task.await;
+    crate::stats::memory::saturating_dec(&crate::stats::memory::ANYTLS_SESSIONS);
 
     session_res
 }

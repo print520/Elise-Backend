@@ -142,7 +142,13 @@ async fn handle_tcp_connection(
                 }
                 done = tasks.join_next(), if !tasks.is_empty() => {
                     match done {
-                        Some(Ok(id)) => { sessions.remove(&id); }
+                        Some(Ok(id)) => {
+                            if sessions.remove(&id).is_some() {
+                                crate::stats::memory::saturating_dec(
+                                    &crate::stats::memory::MIERU_TCP_SESSIONS,
+                                );
+                            }
+                        }
                         Some(Err(error)) => return Err(Error::other(error)),
                         None => {}
                     }
@@ -161,6 +167,13 @@ async fn handle_tcp_connection(
             match frame.meta[0] {
                 PROTOCOL_OPEN_SESSION_REQ => {
                     if sessions.contains_key(&id) { continue; }
+                    const MAX_MIERU_TCP_SESSIONS: usize = 256;
+                    if sessions.len() >= MAX_MIERU_TCP_SESSIONS {
+                        let state = Arc::new(Mutex::new(MieruSessionState::new(id)));
+                        state.lock().await.advance_recv_seq(seq);
+                        writer.lock().await.write_control(&state, PROTOCOL_CLOSE_SESSION_REQ).await?;
+                        continue;
+                    }
                     let state = Arc::new(Mutex::new(MieruSessionState::new(id)));
                     state.lock().await.advance_recv_seq(seq);
 
@@ -186,11 +199,12 @@ async fn handle_tcp_connection(
                     }
                     let session_cancel = cancel.child_token();
                     sessions.insert(id, TcpSession { input, state: state.clone(), cancel: session_cancel.clone() });
+                    crate::stats::memory::MIERU_TCP_SESSIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let writer = writer.clone();
                     let ctx = ctx.clone();
                     let connection_cancel = cancel.clone();
                     tasks.spawn(async move {
-                        let (client, transport) = tokio::io::duplex(65536);
+                        let (client, transport) = tokio::io::duplex(16384);
                         let (client_read, client_write) = tokio::io::split(client);
                         let (mut output, mut input) = tokio::io::split(transport);
                         let mut pumps = tokio::task::JoinSet::new();
@@ -279,6 +293,14 @@ async fn handle_tcp_connection(
     tasks.abort_all();
     while readers.join_next().await.is_some() {}
     while tasks.join_next().await.is_some() {}
+    let remaining = sessions.len() as u64;
+    if remaining > 0 {
+        let _ = crate::stats::memory::MIERU_TCP_SESSIONS.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |v| Some(v.saturating_sub(remaining)),
+        );
+    }
     result
 }
 

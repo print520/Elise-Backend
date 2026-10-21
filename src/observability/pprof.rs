@@ -173,6 +173,29 @@ a:hover {{ text-decoration: underline; }}
             info.push_str(&format!("runtime_os = {}\n", std::env::consts::OS));
             info.push_str(&format!("runtime_arch = {}\n", std::env::consts::ARCH));
             info.push_str(&format!("process_id = {}\n", std::process::id()));
+            if let Some(rss) = crate::stats::memory::process_rss_bytes() {
+                info.push_str(&format!("process_rss_bytes = {}\n", rss));
+            }
+            info.push_str(&format!(
+                "anytls_sessions = {}\n",
+                crate::stats::memory::ANYTLS_SESSIONS.load(Ordering::Relaxed)
+            ));
+            info.push_str(&format!(
+                "vless_mux_sessions = {}\n",
+                crate::stats::memory::VLESS_MUX_SESSIONS.load(Ordering::Relaxed)
+            ));
+            info.push_str(&format!(
+                "mieru_tcp_sessions = {}\n",
+                crate::stats::memory::MIERU_TCP_SESSIONS.load(Ordering::Relaxed)
+            ));
+            info.push_str(&format!(
+                "audit_queue_len = {}\n",
+                crate::stats::memory::AUDIT_QUEUE_LEN.load(Ordering::Relaxed)
+            ));
+            info.push_str(&format!(
+                "audit_queue_dropped = {}\n",
+                crate::stats::memory::AUDIT_QUEUE_DROPPED.load(Ordering::Relaxed)
+            ));
             ("200 OK", "text/plain; charset=utf-8", info)
         }
         "/debug/pprof/goroutine" | "/debug/pprof/tasks" => {
@@ -195,15 +218,17 @@ a:hover {{ text-decoration: underline; }}
         ),
         "/debug/stats" | "/metrics" => {
             let uptime = start_time.elapsed().as_secs();
-            let stats = format!(
-                r#"{{"service":"elise","version":"{}","os":"{}","arch":"{}","pid":{},"uptime_seconds":{},"total_requests":{}}}"#,
-                crate::VERSION,
-                std::env::consts::OS,
-                std::env::consts::ARCH,
-                std::process::id(),
-                uptime,
-                TOTAL_REQUESTS.load(Ordering::Relaxed)
-            );
+            let mut stats = crate::stats::memory::snapshot_json(0, uptime);
+            // Keep total_requests for compatibility with existing dashboards.
+            if let Some(pos) = stats.rfind('}') {
+                stats.insert_str(
+                    pos,
+                    &format!(
+                        ",\"total_requests\":{}",
+                        TOTAL_REQUESTS.load(Ordering::Relaxed)
+                    ),
+                );
+            }
             ("200 OK", "application/json", stats)
         }
         _ => (

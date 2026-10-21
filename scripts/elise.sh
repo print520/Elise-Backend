@@ -17,7 +17,7 @@ fi
 CONF_DIR="/etc/elise"
 MAIN_CONF="$CONF_DIR/elise.conf"
 SYSTEMD_SERVICE="elise.service"
-GITHUB_REPO="Grandova/Elise-Backend"
+GITHUB_REPO="print520/Elise-Backend"
 
 RED="\033[31m"
 GREEN="\033[32m"

@@ -1,6 +1,6 @@
 [Unit]
 Description=Elise Service
-Documentation=https://github.com/Grandova/Elise-Backend
+Documentation=https://github.com/print520/Elise-Backend
 After=network.target nss-lookup.target
 
 [Service]

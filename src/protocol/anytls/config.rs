@@ -139,10 +139,9 @@ impl AnyTlsNodeConfig {
 
         let client_profile = Some(AnyTlsClientProfile {
             server_name: server_name.clone(),
-            insecure: tls_val
-                .and_then(|v| v.get("allow_insecure"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            insecure: crate::panel::types::json_truthy(
+                tls_val.and_then(|v| v.get("allow_insecure")),
+            ),
             alpn: Some(vec!["h3".to_string()]),
             ech: ech_client,
         });

@@ -1,5 +1,27 @@
 use serde::{Deserialize, Serialize};
 
+/// Panels often encode booleans as `"1"` / `"0"` / `"true"` strings or numeric 0/1.
+/// Strict `Value::as_bool()` would treat those as false and break self-signed TLS.
+pub(crate) fn json_truthy(value: Option<&serde_json::Value>) -> bool {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return false;
+    };
+    match value {
+        serde_json::Value::Bool(b) => *b,
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .map(|v| v != 0)
+            .or_else(|| n.as_u64().map(|v| v != 0))
+            .or_else(|| n.as_f64().map(|v| v != 0.0))
+            .unwrap_or(false),
+        serde_json::Value::String(s) => matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => false,
+    }
+}
+
 pub(crate) fn speed_limit_bps(value: Option<&serde_json::Value>) -> std::io::Result<u64> {
     let Some(value) = value.filter(|v| !v.is_null()) else {
         return Ok(0);
@@ -163,4 +185,22 @@ pub struct NodeStatusReport {
     pub out_speed: u64,
     pub tasks_count: u32,
     pub kernel_status: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::json_truthy;
+    use serde_json::json;
+
+    #[test]
+    fn panel_bool_like_values() {
+        assert!(json_truthy(Some(&json!(true))));
+        assert!(json_truthy(Some(&json!("1"))));
+        assert!(json_truthy(Some(&json!("true"))));
+        assert!(json_truthy(Some(&json!(1))));
+        assert!(!json_truthy(Some(&json!(false))));
+        assert!(!json_truthy(Some(&json!("0"))));
+        assert!(!json_truthy(Some(&json!(0))));
+        assert!(!json_truthy(None));
+    }
 }

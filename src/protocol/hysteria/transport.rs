@@ -220,12 +220,12 @@ pub fn build_hysteria_tls_config(
     }
 
     if certs.is_empty() || key_opt.is_none() {
-        let allow_insecure = node_info
-            .tls_settings
-            .as_ref()
-            .and_then(|ts| ts.get("allow_insecure"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let allow_insecure = crate::panel::types::json_truthy(
+            node_info
+                .tls_settings
+                .as_ref()
+                .and_then(|ts| ts.get("allow_insecure")),
+        );
 
         let sni = node_info
             .server_name

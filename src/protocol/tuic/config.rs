@@ -193,12 +193,12 @@ impl TuicNodeConfig {
         }
 
         if certs.is_empty() || key_opt.is_none() {
-            let allow_insecure = node_info
-                .tls_settings
-                .as_ref()
-                .and_then(|ts| ts.get("allow_insecure"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let allow_insecure = crate::panel::types::json_truthy(
+                node_info
+                    .tls_settings
+                    .as_ref()
+                    .and_then(|ts| ts.get("allow_insecure")),
+            );
 
             let sni = node_info
                 .server_name
@@ -289,12 +289,12 @@ impl TuicNodeConfig {
         let udp_relay_mode =
             TuicUdpRelayMode::parse(node_info.udp_relay_mode.as_deref().unwrap_or("native"));
 
-        let allow_insecure = node_info
-            .tls_settings
-            .as_ref()
-            .and_then(|v| v.get("allow_insecure"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let allow_insecure = crate::panel::types::json_truthy(
+            node_info
+                .tls_settings
+                .as_ref()
+                .and_then(|v| v.get("allow_insecure")),
+        );
 
         let client_profile = TuicClientProfile {
             sni: node_info.server_name.clone(),

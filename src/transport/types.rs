@@ -774,12 +774,18 @@ impl StreamSettings {
                     }
                 }
 
-                let reject_unknown_sni = node_info
-                    .cert_config
-                    .as_ref()
-                    .and_then(|cc| cc.get("reject_unknown_sni"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let reject_unknown_sni = crate::panel::types::json_truthy(
+                    node_info
+                        .cert_config
+                        .as_ref()
+                        .and_then(|cc| cc.get("reject_unknown_sni"))
+                        .or_else(|| {
+                            node_info
+                                .tls_settings
+                                .as_ref()
+                                .and_then(|ts| ts.get("reject_unknown_sni"))
+                        }),
+                );
 
                 let mut certificates = Vec::new();
                 if let Some(cc) = &node_info.cert_config {
@@ -942,10 +948,7 @@ impl StreamSettings {
                         .get("server_name")
                         .and_then(|v| v.as_str())
                         .map(String::from);
-                    let allow_insecure = ts
-                        .get("allow_insecure")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
+                    let allow_insecure = crate::panel::types::json_truthy(ts.get("allow_insecure"));
 
                     let fingerprint = node_info
                         .utls
@@ -984,12 +987,12 @@ impl StreamSettings {
 
                 TransportSecurityConfig::Tls(TlsServerConfig {
                     server_name,
-                    allow_self_signed: node_info
-                        .tls_settings
-                        .as_ref()
-                        .and_then(|ts| ts.get("allow_insecure"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
+                    allow_self_signed: crate::panel::types::json_truthy(
+                        node_info
+                            .tls_settings
+                            .as_ref()
+                            .and_then(|ts| ts.get("allow_insecure")),
+                    ),
                     server_names,
                     reject_unknown_sni,
                     certificates,
@@ -1773,6 +1776,34 @@ mod tests {
         assert!(ech.enabled);
         assert_eq!(ech.config, Some("AEn+fakeEchConfig".to_string()));
         assert_eq!(ech.query_server_name, Some("doh.dns.com".to_string()));
+    }
+
+    #[test]
+    fn test_panel_string_allow_insecure_enables_self_signed() {
+        // Xboard/V2board often encode toggles as "1"/"0" strings in tls_settings.
+        let node = NodeInfo {
+            id: 7,
+            node_type: "anytls".to_string(),
+            server_port: 9118,
+            tls: Some(1),
+            tls_settings: Some(json!({
+                "allow_insecure": "1",
+                "cert_mode": "self",
+                "reject_unknown_sni": "0",
+                "server_name": "vehicle-files.prd.cnn1.vn.cloud.tesla.cn"
+            })),
+            ..Default::default()
+        };
+
+        let settings = StreamSettings::from_node_info(&node).unwrap();
+        match &settings.security {
+            TransportSecurityConfig::Tls(tls) => {
+                assert!(tls.allow_self_signed);
+                assert!(!tls.reject_unknown_sni);
+            }
+            other => panic!("expected Tls, got {other:?}"),
+        }
+        assert!(settings.client_tls_profile.unwrap().allow_insecure);
     }
 
     #[test]

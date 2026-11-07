@@ -15,7 +15,7 @@ pub use timing::{
     take_collected_records, SharedTimingTracker, TimingRecord, VisionTimingEvent,
 };
 pub use vision::{
-    TrafficState, VisionReader, VisionWriter, FLOW_VISION, VISION_CMD_CONTINUE, VISION_CMD_DIRECT,
+    TrafficState, VisionReader, VisionWriter, VISION_CMD_CONTINUE, VISION_CMD_DIRECT,
     VISION_CMD_END,
 };
 
@@ -512,9 +512,30 @@ async fn perform_vless_stream_handshake(
         None => return Ok(None),
     };
 
-    let user_flow_is_vision = user.flow.as_deref().unwrap_or("") == FLOW_VISION
-        || matches!(node_config.flow, VlessFlow::Vision);
-    let client_req_vision = req.addons.flow == FLOW_VISION;
+    // A per-user flow is an override; inherit the node flow only when the
+    // panel did not provide a non-empty user-level value. Keeping this
+    // precedence explicit avoids forcing Vision on accounts configured for
+    // standard VLESS.
+    let configured_user_flow = user.flow.as_deref().filter(|flow| !flow.trim().is_empty());
+    let user_flow = match configured_user_flow {
+        Some(flow) => match VlessFlow::parse(Some(flow)) {
+            Ok(flow) => flow,
+            Err(e) => {
+                warn!("VLESS: Invalid flow configured for user {}: {}", user.id, e);
+                return Ok(None);
+            }
+        },
+        None => node_config.flow,
+    };
+    let client_flow = match VlessFlow::parse(Some(&req.addons.flow)) {
+        Ok(flow) => flow,
+        Err(e) => {
+            warn!("VLESS: Unsupported client flow from {}: {}", remote_addr, e);
+            return Ok(None);
+        }
+    };
+    let user_flow_is_vision = matches!(user_flow, VlessFlow::Vision);
+    let client_req_vision = matches!(client_flow, VlessFlow::Vision);
 
     if client_req_vision && !user_flow_is_vision {
         warn!(

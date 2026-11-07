@@ -145,6 +145,7 @@ pub enum TransportSecurityConfig {
 pub struct RealityServerConfig {
     pub dest: String,
     pub server_names: Vec<String>,
+    pub alpn: Vec<String>,
     pub private_key: [u8; 32],
     pub short_ids: Vec<Vec<u8>>,
     pub xver: u8,
@@ -1016,6 +1017,16 @@ impl StreamSettings {
                 }
 
                 let rs_opt = node_info.tls_settings.as_ref();
+                let alpn = rs_opt
+                    .and_then(|rs| rs.get("alpn"))
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let dest = rs_opt
                     .and_then(|rs| rs.get("dest"))
                     .and_then(|v| v.as_str())
@@ -1191,6 +1202,7 @@ impl StreamSettings {
                 TransportSecurityConfig::Reality(RealityServerConfig {
                     dest,
                     server_names,
+                    alpn,
                     private_key,
                     short_ids,
                     xver,

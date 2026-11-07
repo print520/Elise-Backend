@@ -548,6 +548,7 @@ mod tests {
         let config = RealityServerConfig {
             dest: "www.apple.com:443".to_string(),
             server_names: vec!["www.apple.com".to_string()],
+            alpn: Vec::new(),
             private_key: [7u8; 32],
             short_ids: vec![vec![1, 2, 3, 4]],
             xver: 0,
@@ -570,6 +571,7 @@ mod tests {
         let config = RealityServerConfig {
             dest: "www.apple.com:443".to_string(),
             server_names: vec!["www.apple.com".to_string()],
+            alpn: Vec::new(),
             private_key: server_secret.to_bytes(),
             short_ids: vec![valid_short_id.clone()],
             xver: 0,

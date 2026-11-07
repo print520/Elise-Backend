@@ -35,13 +35,22 @@ pub async fn apply_transport_security(
             let drainable = crate::conn::DrainableTlsStream::new(tls_stream);
             Ok(Some(Box::new(drainable)))
         }
-        TransportSecurityConfig::Reality(_) => {
+        TransportSecurityConfig::Reality(config) => {
             let r_server = reality_server.ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::Other,
                     "RealityServer not initialized for REALITY security configuration",
                 )
             })?;
+            let alpn = if config.alpn.is_empty() {
+                alpn
+            } else {
+                config
+                    .alpn
+                    .iter()
+                    .map(|protocol| protocol.as_bytes().to_vec())
+                    .collect()
+            };
             match r_server.accept(stream, remote_addr, alpn).await? {
                 RealityHandshakeResult::Authenticated(s) => Ok(Some(s)),
                 RealityHandshakeResult::Fallbacked => Ok(None),

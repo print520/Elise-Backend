@@ -8,6 +8,7 @@ pub struct GlobalConfig {
     pub api_host: String,
     pub api_key: String,
     pub node_ids: Vec<u32>,
+    pub panel_node_type: Option<String>,
     pub node_sync_interval: u64,
     pub node_report_interval: u64,
     pub auto_tls: bool,
@@ -128,6 +129,7 @@ impl Default for GlobalConfig {
             api_host: String::new(),
             api_key: String::new(),
             node_ids: vec![1],
+            panel_node_type: None,
             node_sync_interval: 60,
             node_report_interval: 60,
             auto_tls: true,
@@ -278,16 +280,95 @@ impl GlobalConfig {
             }
         }
 
-        if !matches!(
-            cfg.panel_type.as_str(),
-            "xboard" | "v2board" | "xiaov2board" | "xiaov2b" | "ppanel" | "sspanel" | "sspanel-uim"
-        ) {
+        let is_v1 = crate::panel::xiaov2boardv1::is_panel_type(&cfg.panel_type);
+        if !is_v1
+            && !matches!(
+                cfg.panel_type.as_str(),
+                "xboard"
+                    | "v2board"
+                    | "xiaov2board"
+                    | "xiaov2b"
+                    | "ppanel"
+                    | "sspanel"
+                    | "sspanel-uim"
+            )
+        {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "Unsupported panel type in configuration (type/panel_type)",
             ));
         }
+        if is_v1 {
+            cfg.validate_panel_node_types()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        }
         Ok(cfg)
+    }
+
+    /// Resolves the panel `node_type` for one node: a `[node_N]` section wins,
+    /// otherwise a single global value applies to every node and a comma list
+    /// is matched positionally against `node_id`.
+    pub fn panel_node_type_for(&self, node_id: u32) -> Option<String> {
+        if let Some(value) = self.node_overrides.get(&node_id).and_then(|o| {
+            o.get("node_type")
+                .or_else(|| o.get("panel_node_type"))
+                .map(|v| v.trim())
+                .filter(|v| !v.is_empty())
+        }) {
+            return Some(value.to_string());
+        }
+        let raw = self.panel_node_type.as_deref()?;
+        let items: Vec<&str> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        match items.as_slice() {
+            [] => None,
+            [single] => Some(single.to_string()),
+            many => self
+                .node_ids
+                .iter()
+                .position(|&id| id == node_id)
+                .and_then(|idx| many.get(idx))
+                .map(|s| s.to_string()),
+        }
+    }
+
+    fn validate_panel_node_types(&self) -> Result<(), String> {
+        use crate::panel::xiaov2boardv1::{normalize_node_type, SUPPORTED_NODE_TYPES};
+
+        let list_len = self
+            .panel_node_type
+            .as_deref()
+            .map(|raw| raw.split(',').filter(|s| !s.trim().is_empty()).count())
+            .unwrap_or(0);
+        if list_len > 1 && list_len != self.node_ids.len() {
+            return Err(format!(
+                "node_type lists {list_len} values but node_id lists {} nodes; \
+                 use one value per node or a [node_N] section",
+                self.node_ids.len()
+            ));
+        }
+        for &node_id in &self.node_ids {
+            match self.panel_node_type_for(node_id) {
+                None => {
+                    return Err(format!(
+                        "panel type {} requires node_type for node {node_id} \
+                         (supported: {SUPPORTED_NODE_TYPES})",
+                        self.panel_type
+                    ))
+                }
+                Some(raw) if normalize_node_type(&raw).is_none() => {
+                    return Err(format!(
+                        "unsupported node_type '{raw}' for node {node_id} \
+                         (supported: {SUPPORTED_NODE_TYPES})"
+                    ))
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(())
     }
 
     pub fn parse(content: &str) -> Self {
@@ -364,6 +445,9 @@ impl GlobalConfig {
                 if !parsed.is_empty() {
                     self.node_ids = parsed;
                 }
+            }
+            "node_type" | "panel_node_type" => {
+                self.panel_node_type = Some(val.trim().to_string()).filter(|v| !v.is_empty())
             }
             "node_sync_interval" | "check_interval" => {
                 if let Ok(n) = val.parse::<u64>() {

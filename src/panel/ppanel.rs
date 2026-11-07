@@ -386,6 +386,7 @@ impl PPanelClient {
                         .get("device_limit")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0) as u32,
+                    username: None,
                     password: item
                         .get("password")
                         .and_then(|v| v.as_str())

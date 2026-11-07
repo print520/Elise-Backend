@@ -49,6 +49,8 @@ pub struct User {
     pub speed_limit: u64,
     pub device_limit: u32,
     #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
     pub password: Option<String>,
     #[serde(default)]
     pub method: Option<String>,

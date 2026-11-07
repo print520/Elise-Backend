@@ -351,6 +351,10 @@ impl V2BoardClient {
                     uuid,
                     speed_limit,
                     device_limit,
+                    username: item
+                        .get("username")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     password: item
                         .get("password")
                         .and_then(|v| v.as_str())

@@ -4,6 +4,7 @@ pub mod types;
 pub mod v2board;
 pub mod xboard;
 pub mod xiaov2board;
+pub mod xiaov2boardv1;
 
 pub use ppanel::PPanelClient;
 pub use sspanel::SSPanelClient;
@@ -11,6 +12,7 @@ pub use types::{NodeInfo, NodeStatusReport, OnlineDeviceItem, TrafficItem, User}
 pub use v2board::V2BoardClient;
 pub use xboard::XboardClient;
 pub use xiaov2board::XiaoV2BoardClient;
+pub use xiaov2boardv1::XiaoV2BoardV1Client;
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -231,12 +233,69 @@ impl PanelClient for XiaoV2BoardClient {
     }
 }
 
+#[async_trait]
+impl PanelClient for XiaoV2BoardV1Client {
+    async fn get_node_info(
+        &self,
+        node_id: u32,
+    ) -> Result<NodeInfo, Box<dyn std::error::Error + Send + Sync>> {
+        self.get_node_info(node_id).await
+    }
+    async fn get_users(
+        &self,
+        node_id: u32,
+    ) -> Result<Vec<User>, Box<dyn std::error::Error + Send + Sync>> {
+        self.get_users(node_id).await
+    }
+    async fn report_traffic(
+        &self,
+        node_id: u32,
+        traffic: Vec<TrafficItem>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.report_traffic(node_id, traffic).await
+    }
+    async fn report_online_devices(
+        &self,
+        node_id: u32,
+        devices: Vec<OnlineDeviceItem>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.report_online_devices(node_id, devices).await
+    }
+    async fn get_user_alivelist(
+        &self,
+        node_id: u32,
+    ) -> Result<std::collections::HashMap<u32, u32>, Box<dyn std::error::Error + Send + Sync>> {
+        self.get_user_alivelist(node_id).await
+    }
+}
+
+pub fn create_panel_client_from_config(cfg: &crate::config::GlobalConfig) -> Arc<dyn PanelClient> {
+    if xiaov2boardv1::is_panel_type(&cfg.panel_type) {
+        let node_types = cfg
+            .node_ids
+            .iter()
+            .filter_map(|&id| cfg.panel_node_type_for(id).map(|t| (id, t)))
+            .collect();
+        return Arc::new(XiaoV2BoardV1Client::new(
+            cfg.api_host.clone(),
+            cfg.api_key.clone(),
+            node_types,
+        ));
+    }
+    create_panel_client(&cfg.panel_type, &cfg.api_host, &cfg.api_key)
+}
+
 pub fn create_panel_client(panel_type: &str, url: &str, key: &str) -> Arc<dyn PanelClient> {
     match panel_type.to_lowercase().as_str() {
         "v2board" => Arc::new(V2BoardClient::new(url.to_string(), key.to_string())),
         "xiaov2board" | "xiaov2b" => {
             Arc::new(XiaoV2BoardClient::new(url.to_string(), key.to_string()))
         }
+        t if xiaov2boardv1::is_panel_type(t) => Arc::new(XiaoV2BoardV1Client::new(
+            url.to_string(),
+            key.to_string(),
+            std::collections::HashMap::new(),
+        )),
         "ppanel" => Arc::new(PPanelClient::new(url.to_string(), key.to_string())),
         "sspanel" | "sspanel-uim" => Arc::new(SSPanelClient::new(url.to_string(), key.to_string())),
         _ => Arc::new(XboardClient::new(url.to_string(), key.to_string())),

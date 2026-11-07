@@ -4,7 +4,7 @@ use crate::config::GlobalConfig;
 use crate::dns::RuleBasedDNSManager;
 use crate::limiter::{ConnectionLimiter, DeviceLimiter, IpUserCache, RateLimiter};
 use crate::observability::{AuditLogger, ClickHouseLogger};
-use crate::panel::create_panel_client;
+use crate::panel::create_panel_client_from_config;
 use crate::proxy::node::NodeRunner;
 use crate::proxy::router::{OutboundDialer, Router};
 use crate::security::{AttackDefenseManager, AuditController, TLSManager};
@@ -33,11 +33,7 @@ impl MasterServer {
             self.global_config.node_ids.len()
         );
 
-        let panel_client = create_panel_client(
-            &self.global_config.panel_type,
-            &self.global_config.api_host,
-            &self.global_config.api_key,
-        );
+        let panel_client = create_panel_client_from_config(&self.global_config);
 
         let dns_manager = Arc::new(RuleBasedDNSManager::new(
             &self.global_config.dns_strategy,

@@ -299,6 +299,7 @@ impl XboardClient {
                     uuid,
                     speed_limit,
                     device_limit,
+                    username: None,
                     password: item
                         .get("password")
                         .and_then(|v| v.as_str())

@@ -117,8 +117,11 @@ Elise 根据适配器解析面板下发的**节点协议、端口、TLS 设置�
 # XBoard 对接示例 (通用 API)
 elise config type=xboard node_id=1 panel_url=https://panel.example.com panel_key=your_token_here
 
-# XiaoV2Board 对接示例
+# XiaoV2Board 对接示例 (v2node 接口)
 elise config type=xiaov2board node_id=1 panel_url=https://panel.example.com panel_key=your_token_here
+
+# XiaoV2Board V1 对接示例 (原版 UniProxy 接口，必须指定 node_type)
+elise config type=xiaov2boardv1 node_id=7 node_type=vless panel_url=https://panel.example.com panel_key=your_token_here
 
 # PPanel 对接示例 (panel_key 对应 secret_key)
 elise config type=ppanel node_id=1 panel_url=https://panel.example.com panel_key=your_secret_key
@@ -132,6 +135,15 @@ elise config type=sspanel-uim node_id=3 panel_url=https://sspanel.example.com pa
 
 > [!TIP]
 > 配置完成后，运行 `elise restart` 即可完成对接启动。`node_id` 是面板节点 ID，不是端口；`panel_key` 是节点对接密钥，不是订阅用户密码。多面板实例使用独立配置目录。
+
+> [!NOTE]
+> `xiaov2board` 对接面板里的 **v2node** 节点（`/api/v2/server/config`，面板下发协议类型）；`xiaov2boardv1` 对接面板里按协议分表的**原版节点**（`/api/v1/server/UniProxy/*`，与 V2bX 的 `NodeType` 相同），面板不下发协议类型，因此必须用 `node_type` 指定，且要和面板里该节点所在的协议列表一致，否则面板会返回 `server is not exist`。多个原版节点协议不同时：
+>
+> ```ini
+> type = xiaov2boardv1
+> node_id = 7,8
+> node_type = vless,trojan
+> ```
 
 ---
 
@@ -376,10 +388,11 @@ cert_mode = none
 
 | 参数名                                     | 默认值   | 允许值 / 说明                                                |
 | ------------------------------------------ | -------- | ------------------------------------------------------------ |
-| `panel_type` / `type`                      | `xboard` | 面板类型：`xboard` / `xiaov2board` / `ppanel` / `v2board` / `sspanel-uim` |
+| `panel_type` / `type`                      | `xboard` | 面板类型：`xboard` / `xiaov2board` / `xiaov2boardv1` / `ppanel` / `v2board` / `sspanel-uim` |
 | `api_host` / `panel_url`                   | 必填     | 面板 WebAPI 接口根地址（如 `https://panel.example.com`，末尾无需加斜杠） |
 | `api_key` / `panel_key`                    | 必填     | 面板通信 Token 密钥（对应 PPanel 的 `secret_key`）           |
 | `node_id` / `node_ids`                     | `1`      | 接管的节点 ID，多节点使用英文逗号分隔（如 `1,2,3`）          |
+| `node_type` / `panel_node_type`            | 无       | 仅 `xiaov2boardv1` 使用且必填：`vmess` / `vless` / `trojan` / `shadowsocks` / `hysteria` / `hysteria2` / `tuic` / `anytls` / `mieru` / `naive`。单个值作用于所有节点；逗号列表按 `node_id` 顺序一一对应；`[node_N]` 段内的 `node_type` 优先 |
 | `node_sync_interval` / `check_interval`    | `60`     | 从面板拉取节点配置与用户列表的周期（秒，最低 10）            |
 | `node_report_interval` / `submit_interval` | `60`     | 向上报送流量与在线设备列表的周期（秒，最低 10）              |
 

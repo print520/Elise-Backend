@@ -92,13 +92,21 @@ pub struct MieruUser {
 }
 
 impl MieruUser {
+    /// Panels that send an explicit `username` (V2Board forks: user id plus
+    /// uuid password) authenticate with that pair; otherwise the Xboard
+    /// convention of one credential used as both username and password applies.
     pub fn from_panel_user(user: User) -> Self {
-        let username = user
+        let secret = user
             .password
             .clone()
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| user.uuid.clone());
-        let hashed_password = hash_password(username.as_bytes(), username.as_bytes());
+        let username = user
+            .username
+            .clone()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| secret.clone());
+        let hashed_password = hash_password(secret.as_bytes(), username.as_bytes());
         Self {
             panel_user: user,
             username,
@@ -249,5 +257,34 @@ mod tests {
                 hash_password(expected.as_bytes(), expected.as_bytes())
             );
         }
+    }
+
+    #[test]
+    fn panel_username_pairs_with_uuid_password() {
+        let user = MieruUser::from_panel_user(User {
+            id: 12,
+            uuid: "panel-uuid".into(),
+            username: Some("12".into()),
+            password: Some("panel-uuid".into()),
+            ..Default::default()
+        });
+        assert_eq!(user.username, "12");
+        assert_eq!(user.hashed_password, hash_password(b"panel-uuid", b"12"));
+
+        let mut nonce = [0u8; 24];
+        nonce[..16].copy_from_slice(&[9u8; 16]);
+        nonce[20..24].copy_from_slice(&compute_user_hint("12", &[9u8; 16]));
+        assert!(check_user_hint(&user.username, &nonce));
+
+        let without_password = MieruUser::from_panel_user(User {
+            id: 12,
+            uuid: "panel-uuid".into(),
+            username: Some("12".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            without_password.hashed_password,
+            hash_password(b"panel-uuid", b"12")
+        );
     }
 }

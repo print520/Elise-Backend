@@ -121,6 +121,7 @@ impl SSPanelClient {
                         .get("node_iplimit")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0) as u32,
+                    username: None,
                     password: item
                         .get("passwd")
                         .and_then(|v| v.as_str())

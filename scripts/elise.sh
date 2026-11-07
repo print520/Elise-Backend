@@ -318,17 +318,21 @@ cmd_setup() {
     echo -e "${BOLD}           Elise 节点配置向导            ${RESET}"
     echo -e "${BOLD}========================================${RESET}"
     
-    local p_type p_url p_key p_id p_listen
+    local p_type p_url p_key p_id p_listen p_node_type="" p_node_type_line=""
     echo "1. 请选择对接面板类型："
     echo "   1) XBoard"
     echo "   2) V2Board"
     echo "   3) PPanel"
     echo "   4) SSPanel"
-    read -rp "请选择 [1-4，默认 1]: " t_opt
+    echo "   5) XiaoV2Board (v2node 接口)"
+    echo "   6) XiaoV2Board V1 (原版 UniProxy 接口，需指定协议类型)"
+    read -rp "请选择 [1-6，默认 1]: " t_opt
     case "$t_opt" in
         2) p_type="v2board" ;;
         3) p_type="ppanel" ;;
         4) p_type="sspanel" ;;
+        5) p_type="xiaov2board" ;;
+        6) p_type="xiaov2boardv1" ;;
         *) p_type="xboard" ;;
     esac
     
@@ -336,6 +340,15 @@ cmd_setup() {
     p_url="${p_url%/}"
     read -rp "3. 请输入通信密钥 (panel_key / token): " p_key
     read -rp "4. 请输入节点 ID (node_id，多节点用逗号分隔): " p_id
+    if [[ "$p_type" == "xiaov2boardv1" ]]; then
+        echo "   可选协议: vmess / vless / trojan / shadowsocks / hysteria / hysteria2 / tuic / anytls / mieru / naive"
+        read -rp "   请输入节点协议 (node_type，多节点按 node_id 顺序用逗号分隔): " p_node_type
+        if [[ -z "$p_node_type" ]]; then
+            echo -e "${RED}错误: XiaoV2Board V1 必须填写 node_type！配置中止。${RESET}"
+            return 1
+        fi
+        p_node_type_line="node_type=$p_node_type"
+    fi
     read -rp "5. 请输入监听地址 [默认 0.0.0.0]: " p_listen
     p_listen="${p_listen:-0.0.0.0}"
     
@@ -354,6 +367,7 @@ type=$p_type
 panel_url=$p_url
 panel_key=$p_key
 node_id=$p_id
+$p_node_type_line
 
 check_interval=60
 submit_interval=60

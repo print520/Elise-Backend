@@ -54,6 +54,9 @@ impl Inbound for NaiveInbound {
         let mut map = HashMap::new();
         for u in users {
             let pass = u.password.clone().unwrap_or_else(|| u.uuid.clone());
+            if let Some(name) = u.username.as_deref().filter(|n| !n.is_empty()) {
+                map.insert(format!("{name}:{pass}"), u.clone());
+            }
             map.insert(format!("{}:{}", u.id, pass), u.clone());
             map.insert(format!("{}:{}", u.uuid, pass), u);
         }
@@ -66,6 +69,7 @@ impl Inbound for NaiveInbound {
         node_info: NodeInfo,
         mut shutdown_rx: broadcast::Receiver<()>,
     ) -> std::io::Result<()> {
+        let node_info = normalize_naive_network(node_info)?;
         let bind_addr = format!("{}:{}", ctx.listen_addr, ctx.port);
         let listener = bind_tcp_listener(&bind_addr, ctx.global_config.mptcp).await?;
         if node_info.tls.is_some_and(|mode| mode > 1) {
@@ -139,6 +143,28 @@ impl Inbound for NaiveInbound {
         crate::protocol::common::inbound::drain_connections(&mut connections).await;
         Ok(())
     }
+}
+
+/// Panels leave `network` empty for the default HTTPS (HTTP/2) mode and use
+/// `udp` for NaiveProxy over QUIC, which this inbound does not implement.
+fn normalize_naive_network(mut node_info: NodeInfo) -> std::io::Result<NodeInfo> {
+    let network = node_info
+        .network
+        .as_deref()
+        .or(node_info.transport.as_deref())
+        .map(str::trim)
+        .unwrap_or("");
+    if network.eq_ignore_ascii_case("udp") || network.eq_ignore_ascii_case("quic") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "NaiveProxy over QUIC (network=udp) is not supported; set the node network to tcp",
+        ));
+    }
+    if network.is_empty() {
+        node_info.network = Some("tcp".to_string());
+        node_info.transport = Some("TCP".to_string());
+    }
+    Ok(node_info)
 }
 
 async fn handle_connection(
@@ -823,4 +849,53 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    fn node(network: Option<&str>) -> NodeInfo {
+        NodeInfo {
+            node_type: "naive".into(),
+            server_port: 443,
+            tls: Some(1),
+            network: network.map(String::from),
+            transport: network.map(str::to_ascii_uppercase),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn empty_network_defaults_to_tcp_and_quic_is_rejected() {
+        for network in [None, Some(""), Some("tcp")] {
+            let info = normalize_naive_network(node(network)).unwrap();
+            assert_eq!(info.network.as_deref(), Some("tcp"));
+            assert!(crate::transport::StreamSettings::from_node_info(&info).is_ok());
+        }
+        let error = normalize_naive_network(node(Some("udp"))).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn panel_username_and_uuid_password_authenticate() {
+        let inbound = NaiveInbound::new();
+        inbound.update_users(vec![User {
+            id: 12,
+            uuid: "test-uuid".into(),
+            username: Some("12".into()),
+            password: Some("test-uuid".into()),
+            ..Default::default()
+        }]);
+        let header = |creds: &str| {
+            format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(creds)
+            )
+        };
+        let user = verify_auth(Some(&header("12:test-uuid")), &inbound.users).unwrap();
+        assert_eq!(user.id, 12);
+        assert!(verify_auth(Some(&header("12:wrong")), &inbound.users).is_err());
+    }
 }

@@ -46,6 +46,7 @@ impl XiaoV2BoardClient {
             let reason = match val.get("message").and_then(Value::as_str) {
                 Some("token is null") => "token is null: configure the panel server token",
                 Some("token is error") => "token is error: check the panel server token",
+                Some("unauthorized") => "unauthorized: check the panel server token",
                 Some("server is not exist") => {
                     "server is not exist: check node_id in the panel v2node list"
                 }
@@ -68,7 +69,7 @@ impl XiaoV2BoardClient {
                 "Invalid XiaoV2Board config: missing protocol or invalid server_port".into(),
             );
         }
-        Ok(self.parse_v2_node_info(node_id, data))
+        Ok(Self::parse_v2_node_info(node_id, data))
     }
 
     fn request(
@@ -86,7 +87,7 @@ impl XiaoV2BoardClient {
             ])
     }
 
-    fn parse_v2_node_info(&self, node_id: u32, data: &Value) -> NodeInfo {
+    pub(crate) fn parse_v2_node_info(node_id: u32, data: &Value) -> NodeInfo {
         let mut node_type = data
             .get("protocol")
             .or_else(|| data.get("server_type"))
@@ -372,6 +373,10 @@ impl XiaoV2BoardClient {
                     uuid,
                     speed_limit,
                     device_limit,
+                    username: item
+                        .get("username")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     password: item
                         .get("password")
                         .and_then(|v| v.as_str())
@@ -613,6 +618,22 @@ mod tests {
             client.get_user_alivelist(242).await.unwrap().get(&12),
             Some(&2)
         );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn v2node_mieru_node_and_credentials() {
+        let (client, server) = fixture("fixture", vec![
+            ("GET", "/api/v2/server/config", "200 OK", r#"{"listen_ip":"0.0.0.0","server_port":2012,"network":"tcp","network_settings":{"mtu":1400,"multiplexing":"MULTIPLEXING_LOW","server_traffic_pattern":"CgIIAQ=="},"protocol":"mieru","tls":0,"port_bindings":[{"port":2012,"protocol":"TCP"}],"mtu":1400,"traffic_pattern":"CgIIAQ==","user_hint_is_mandatory":false}"#, Value::Null),
+            ("GET", "/api/v1/server/UniProxy/user", "200 OK", r#"{"users":[{"id":12,"uuid":"test-uuid","username":"12","password":"test-uuid"}]}"#, Value::Null),
+        ]).await;
+        let info = client.get_node_info(242).await.unwrap();
+        assert_eq!(info.node_type, "mieru");
+        assert_eq!(info.transport.as_deref(), Some("TCP"));
+        assert_eq!(info.traffic_pattern.as_deref(), Some("CgIIAQ=="));
+        let users = client.get_users(242).await.unwrap();
+        assert_eq!(users[0].username.as_deref(), Some("12"));
+        assert_eq!(users[0].password.as_deref(), Some("test-uuid"));
         server.await.unwrap();
     }
 

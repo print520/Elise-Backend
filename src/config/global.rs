@@ -76,6 +76,8 @@ pub struct GlobalConfig {
     pub pprof_addr: String,
     pub dns_env_vars: HashMap<String, String>,
     pub tcp_timeout: u64,
+    /// Mieru SOCKS TCP stream idle timeout; defaults to 30 minutes, 0 disables it.
+    pub mieru_tcp_session_timeout: u64,
     pub udp_timeout: u64,
     pub mptcp: bool,
     pub default_dns: Option<String>,
@@ -207,6 +209,7 @@ impl Default for GlobalConfig {
             pprof_addr: "127.0.0.1:6060".to_string(),
             dns_env_vars: HashMap::new(),
             tcp_timeout: 300,
+            mieru_tcp_session_timeout: 1800,
             udp_timeout: 300,
             mptcp: false,
             default_dns: None,
@@ -642,6 +645,11 @@ impl GlobalConfig {
             "tcp_timeout" => {
                 if let Ok(n) = val.parse::<u64>() {
                     self.tcp_timeout = n;
+                }
+            }
+            "mieru_tcp_session_timeout" => {
+                if let Ok(n) = val.parse::<u64>() {
+                    self.mieru_tcp_session_timeout = n;
                 }
             }
             "udp_timeout" => {

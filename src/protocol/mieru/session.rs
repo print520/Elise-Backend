@@ -8,6 +8,46 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
+const IO_PROGRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+async fn read_exact_with_progress_timeout<R>(reader: &mut R, mut buf: &mut [u8]) -> io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    while !buf.is_empty() {
+        let n = tokio::time::timeout(IO_PROGRESS_TIMEOUT, reader.read(buf))
+            .await
+            .map_err(|_| Error::new(ErrorKind::TimedOut, "Mieru frame read made no progress"))??;
+        if n == 0 {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                "Mieru frame truncated",
+            ));
+        }
+        buf = &mut buf[n..];
+    }
+    Ok(())
+}
+
+async fn write_all_with_progress_timeout<W>(writer: &mut W, mut buf: &[u8]) -> io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    while !buf.is_empty() {
+        let n = tokio::time::timeout(IO_PROGRESS_TIMEOUT, writer.write(buf))
+            .await
+            .map_err(|_| Error::new(ErrorKind::TimedOut, "Mieru frame write made no progress"))??;
+        if n == 0 {
+            return Err(Error::new(
+                ErrorKind::WriteZero,
+                "Mieru frame write returned zero",
+            ));
+        }
+        buf = &buf[n..];
+    }
+    Ok(())
+}
+
 pub const PROTOCOL_OPEN_SESSION_REQ: u8 = 2;
 pub const PROTOCOL_OPEN_SESSION_RESP: u8 = 3;
 pub const PROTOCOL_CLOSE_SESSION_REQ: u8 = 4;
@@ -214,13 +254,9 @@ impl<S: AsyncReadExt + Unpin> MieruSessionReader<S> {
         if self.stream.read(&mut header[..1]).await? == 0 {
             return Ok(None);
         }
-        tokio::time::timeout(std::time::Duration::from_secs(15), async {
-            self.stream.read_exact(&mut header[1..]).await?;
-            let meta = self.decoder.decrypt_metadata(&header)?;
-            self.read_payload(meta).await.map(Some)
-        })
-        .await
-        .map_err(|_| Error::new(ErrorKind::TimedOut, "Mieru frame timed out"))?
+        read_exact_with_progress_timeout(&mut self.stream, &mut header[1..]).await?;
+        let meta = self.decoder.decrypt_metadata(&header)?;
+        self.read_payload(meta).await.map(Some)
     }
 
     pub async fn read_payload(&mut self, meta: [u8; METADATA_LENGTH]) -> io::Result<MieruFrame> {
@@ -262,10 +298,10 @@ impl<S: AsyncReadExt + Unpin> MieruSessionReader<S> {
             }
         };
         let mut padding = [0u8; 255];
-        self.stream.read_exact(&mut padding[..prefix]).await?;
+        read_exact_with_progress_timeout(&mut self.stream, &mut padding[..prefix]).await?;
         let payload = if length > 0 {
             let mut wire = vec![0u8; length + OVERHEAD];
-            self.stream.read_exact(&mut wire).await?;
+            read_exact_with_progress_timeout(&mut self.stream, &mut wire).await?;
             if meta[0] == PROTOCOL_DATA_C2S_LOW_ENTROPY {
                 let extracted = u16::from_be_bytes(meta[29..31].try_into().unwrap()) as usize;
 
@@ -283,7 +319,7 @@ impl<S: AsyncReadExt + Unpin> MieruSessionReader<S> {
         } else {
             Vec::new()
         };
-        self.stream.read_exact(&mut padding[..suffix]).await?;
+        read_exact_with_progress_timeout(&mut self.stream, &mut padding[..suffix]).await?;
         Ok(MieruFrame { meta, payload })
     }
 }
@@ -359,22 +395,17 @@ impl<S: AsyncWriteExt + Unpin> MieruSessionWriter<S> {
                 frame.extend_from_slice(&end_pad);
             }
 
-            tokio::time::timeout(std::time::Duration::from_secs(15), async {
-                if self.pattern.is_tcp_fragment_enabled() {
-                    let fragments = self.pattern.fragment_tcp_buffer(&frame);
-                    for frag in fragments {
-                        self.stream.write_all(frag).await?;
-                        if let Some(sleep) = self.pattern.next_tcp_fragment_sleep() {
-                            tokio::time::sleep(sleep).await;
-                        }
+            if self.pattern.is_tcp_fragment_enabled() {
+                let fragments = self.pattern.fragment_tcp_buffer(&frame);
+                for frag in fragments {
+                    write_all_with_progress_timeout(&mut self.stream, frag).await?;
+                    if let Some(sleep) = self.pattern.next_tcp_fragment_sleep() {
+                        tokio::time::sleep(sleep).await;
                     }
-                } else {
-                    self.stream.write_all(&frame).await?;
                 }
-                Ok::<_, io::Error>(())
-            })
-            .await
-            .map_err(|_| Error::new(ErrorKind::TimedOut, "Mieru frame write timed out"))??;
+            } else {
+                write_all_with_progress_timeout(&mut self.stream, &frame).await?;
+            }
 
             offset += chunk_len;
         }
@@ -411,12 +442,10 @@ impl<S: AsyncWriteExt + Unpin> MieruSessionWriter<S> {
         } else {
             self.encoder.encrypt_subsequent_metadata(&meta)?
         };
-        tokio::time::timeout(std::time::Duration::from_secs(15), async {
-            self.stream.write_all(&frame).await?;
-            self.stream.flush().await
-        })
-        .await
-        .map_err(|_| Error::new(ErrorKind::TimedOut, "Mieru control write timed out"))?
+        write_all_with_progress_timeout(&mut self.stream, &frame).await?;
+        tokio::time::timeout(IO_PROGRESS_TIMEOUT, self.stream.flush())
+            .await
+            .map_err(|_| Error::new(ErrorKind::TimedOut, "Mieru control flush timed out"))?
     }
 }
 

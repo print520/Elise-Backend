@@ -274,11 +274,12 @@ flowchart TD
 | `listen_addr` / `listen`                                     | 使用面板或全局地址 | 节点监听地址；填写一个本机 IP                             |
 | `port_offset`                                                | `0`                | 实际监听端口 = 面板端口 + 偏移，结果必须为 1–65535        |
 | `proxy_protocol`                                             | 沿用全局           | 节点 TCP PROXY Protocol 开关；可信代理策略仍来自全局      |
-| `udp_proxy_protocol`                                         | 沿用全局           | 接入公共 UDP 路径的协议使用；不代表 Mieru 底层 UDP 已实现 |
+| `udp_proxy_protocol`                                         | 沿用全局           | 接入公共 UDP 路径的协议使用；Mieru 原生 UDP 由节点 `transport` 选择 |
 | `mptcp`                                                      | 沿用全局           | 接入公共 TCP listener 的路径使用                          |
 | `check_interval`                                             | 全局 `60` 秒       | 节点用户同步周期                                          |
 | `submit_interval`                                            | 全局 `60` 秒       | 节点流量上报周期                                          |
 | `mieru_traffic_pattern`                                      | 空                 | 非空值覆盖主配置/面板；空值继续使用上一级                 |
+| `mieru_tcp_session_timeout`                                  | `1800` 秒           | Mieru SOCKS TCP 目标流空闲超时；默认半小时回收静默流以控制资源，`0` 禁用此超时 |
 | `force_close_ssl` / `disable_tls`                            | `false`            | 当前仅关闭此节点的自动自签开关，**不保证关闭面板 TLS**    |
 | `cert_file`、`key_file`、`cert_domain`                       | 无                 | 可以解析保存；尚未接入此节点的 TLS 配置覆盖               |
 | `cert_mode`、`cert_key_length`、`acme_server`、`dns_provider` | 无                 | 自定义字段会保存；未接通内置 ACME 工作流                  |
@@ -407,6 +408,7 @@ cert_mode = none
 | `listen_addr` / `listen`                         | `0.0.0.0` | 一个监听 IP；IPv6 使用对应地址，不要写逗号分隔多 IP          |
 | `listen_strategy` / `multi_node_listen_strategy` | `auto`    | 配置保留字段；尚无公共运行时分配器落实 `auto/shared/split` 三种策略 |
 | `tcp_timeout`                                    | `300`     | 公共 TCP 空闲超时，秒；不等同于连接总寿命                    |
+| `mieru_tcp_session_timeout`                     | `1800`    | Mieru SOCKS TCP 目标流空闲超时秒；默认半小时，`0` 禁用；独立于通用 `tcp_timeout` |
 | `udp_timeout`                                    | `300`     | 公共 UDP 会话空闲超时，秒                                    |
 | `mptcp`                                          | `false`   | 公共 listener 的 Linux MPTCP 开关；平台/内核不支持时会报错   |
 
@@ -945,11 +947,11 @@ sudo cp -f /usr/local/bin/kcptun-server /etc/elise/kcptun-server
 
 | 项目               | 当前行为                                                     |
 | ------------------ | ------------------------------------------------------------ |
-| 面板节点 transport | 选择 **TCP**                                                 |
+| 面板节点 transport | 支持 **TCP** 和 **UDP**；一般优先 TCP，UDP 需开放对应 UDP 端口 |
 | 用户名、密码       | XBoard 当前接入使用同一个面板用户凭据：非空 `password` 优先，否则使用 `uuid` |
 | 会话复用           | TCP 上支持多个逻辑会话；已有 Mihomo 默认复用互通记录         |
-| UDP Associate      | 经 TCP 隧道转发 UDP；客户端仍需开启 UDP                      |
-| 原生 UDP 底层      | Unsupported，不要把面板 transport 改成 UDP                   |
+| UDP Associate      | 经 Mieru 会话流转发 UDP；客户端仍需开启 UDP，底层 TCP/UDP 均可 |
+| 原生 UDP 底层      | 支持；单包大小受节点 MTU 限制，网络必须允许 UDP 通行           |
 | 用户更新           | 由面板用户同步更新；客户端凭据须与当前订阅保持一致           |
 
 Mihomo 配置中 `udp: true` 是允许代理 UDP 数据，不是切换底层 transport。延迟测试通过只能证明短连接的一部分路径，不能替代网页、长连接、复用和 UDP DNS 验收。

@@ -53,6 +53,14 @@ pub async fn start_tcp_server(
                     }
                 };
                 let _ = stream.set_nodelay(true);
+                // Low-frequency kernel probes preserve NAT state and detect dead peers without
+                // creating an application-level heartbeat task per Mieru connection.
+                let keepalive = socket2::TcpKeepalive::new()
+                    .with_time(Duration::from_secs(60))
+                    .with_interval(Duration::from_secs(15));
+                if let Err(error) = socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive) {
+                    debug!(error = %error, "Could not configure Mieru TCP keepalive");
+                }
 
                 let ctx = ctx.clone();
                 let user_index = user_index.clone();

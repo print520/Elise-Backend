@@ -538,6 +538,13 @@ impl NodeRunner {
                     .insert("mieru_traffic_pattern".into(), pattern.clone());
             }
         }
+        if let Some(timeout) = cfg
+            .custom_settings
+            .get("mieru_tcp_session_timeout")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+        {
+            node_effective_global.mieru_tcp_session_timeout = timeout;
+        }
         if let Some(pp) = cfg.proxy_protocol {
             node_effective_global.proxy_protocol = pp;
             if pp

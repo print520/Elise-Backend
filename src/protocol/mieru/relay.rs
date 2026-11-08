@@ -193,7 +193,7 @@ where
         &mut outbound_stream,
         user_id,
         Some(&ctx.rate_limiter),
-        ctx.global_config.tcp_timeout,
+        ctx.global_config.mieru_tcp_session_timeout,
     )
     .await;
     let (up_bytes, down_bytes) = client.stats();

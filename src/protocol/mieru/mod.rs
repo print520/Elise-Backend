@@ -104,11 +104,22 @@ impl Inbound for MieruInbound {
             ctx.port, transport
         );
 
+        let mtu = node_info
+            .network_settings
+            .as_ref()
+            .and_then(|settings| settings.get("mtu"))
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()))
+            })
+            .map(|value| value as usize)
+            .unwrap_or(1400);
+
         match transport.as_str() {
-            "UDP" => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Mieru UDP transport requires reliable delivery and is not supported",
-            )),
+            "UDP" => {
+                udp::start_udp_server(ctx, self.users.clone(), pattern_exec, mtu, shutdown_rx).await
+            }
             "TCP" => {
                 tcp::start_tcp_server(ctx, self.users.clone(), pattern_exec, shutdown_rx).await
             }

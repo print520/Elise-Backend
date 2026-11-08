@@ -2,6 +2,9 @@ name: Release Elise Multi-Arch
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: read

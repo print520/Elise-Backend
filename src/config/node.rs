@@ -530,6 +530,19 @@ impl NodeConfig {
                     "# Mieru 非空覆盖优先级：节点 [USER] > 主配置 > 面板；留空使用面板值。\n# mieru_traffic_pattern =\n",
                 );
             }
+            if !user_part.lines().any(|line| {
+                line.trim()
+                    .trim_start_matches('#')
+                    .trim()
+                    .split_once('=')
+                    .is_some_and(|(key, _)| {
+                        key.trim().eq_ignore_ascii_case("mieru_tcp_session_timeout")
+                    })
+            }) {
+                user_part.push_str(
+                    "# Mieru TCP 目标流空闲超时：节点 [USER] > 主配置；默认 1800 秒，0 表示禁用。\n# mieru_tcp_session_timeout = 1800\n",
+                );
+            }
         }
 
         let mut settings = serde_json::to_value(node_info).map_err(std::io::Error::other)?;
